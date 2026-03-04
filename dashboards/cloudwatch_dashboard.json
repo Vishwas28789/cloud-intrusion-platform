@@ -1,0 +1,278 @@
+{
+  "widgets": [
+    {
+      "type": "text",
+      "x": 0,
+      "y": 0,
+      "width": 24,
+      "height": 2,
+      "properties": {
+        "markdown": "# 🛡️ Cloud Intrusion Behavior Analytics Platform\n**Real-time honeypot monitoring dashboard** | Region: `${aws_region}` | Log Group: `${log_group_name}`"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 2,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "title": "Incoming Honeypot Log Events (5-min)",
+        "view": "timeSeries",
+        "stacked": false,
+        "metrics": [
+          [
+            "AWS/Logs",
+            "IncomingLogEvents",
+            "LogGroupName",
+            "${log_group_name}",
+            { "stat": "Sum", "period": 300, "color": "#ff6b6b", "label": "Log Events" }
+          ]
+        ],
+        "region": "${aws_region}",
+        "period": 300,
+        "yAxis": {
+          "left": { "min": 0, "label": "Events" }
+        }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8,
+      "y": 2,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "title": "Lambda Log Processor – Invocations & Errors",
+        "view": "timeSeries",
+        "stacked": false,
+        "metrics": [
+          [
+            "AWS/Lambda",
+            "Invocations",
+            "FunctionName",
+            "${lambda_function}",
+            { "stat": "Sum", "period": 300, "color": "#4ecdc4", "label": "Invocations" }
+          ],
+          [
+            "AWS/Lambda",
+            "Errors",
+            "FunctionName",
+            "${lambda_function}",
+            { "stat": "Sum", "period": 300, "color": "#ff6b6b", "label": "Errors" }
+          ]
+        ],
+        "region": "${aws_region}",
+        "period": 300,
+        "yAxis": {
+          "left": { "min": 0, "label": "Count" }
+        }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16,
+      "y": 2,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "title": "Lambda Duration (p50 / p95 / p99)",
+        "view": "timeSeries",
+        "stacked": false,
+        "metrics": [
+          [
+            "AWS/Lambda",
+            "Duration",
+            "FunctionName",
+            "${lambda_function}",
+            { "stat": "p50", "period": 300, "color": "#45b7d1", "label": "p50" }
+          ],
+          [
+            "AWS/Lambda",
+            "Duration",
+            "FunctionName",
+            "${lambda_function}",
+            { "stat": "p95", "period": 300, "color": "#f9ca24", "label": "p95" }
+          ],
+          [
+            "AWS/Lambda",
+            "Duration",
+            "FunctionName",
+            "${lambda_function}",
+            { "stat": "p99", "period": 300, "color": "#ff6b6b", "label": "p99" }
+          ]
+        ],
+        "region": "${aws_region}",
+        "period": 300,
+        "yAxis": {
+          "left": { "min": 0, "label": "ms" }
+        }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 8,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "title": "EC2 Honeypot – CPU Utilisation",
+        "view": "timeSeries",
+        "stacked": false,
+        "metrics": [
+          [
+            "AWS/EC2",
+            "CPUUtilization",
+            "InstanceId",
+            "${instance_id}",
+            { "stat": "Average", "period": 300, "color": "#6c5ce7", "label": "CPU %" }
+          ]
+        ],
+        "region": "${aws_region}",
+        "period": 300,
+        "yAxis": {
+          "left": { "min": 0, "max": 100, "label": "%" }
+        }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8,
+      "y": 8,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "title": "EC2 Honeypot – Network In/Out",
+        "view": "timeSeries",
+        "stacked": false,
+        "metrics": [
+          [
+            "AWS/EC2",
+            "NetworkIn",
+            "InstanceId",
+            "${instance_id}",
+            { "stat": "Sum", "period": 300, "color": "#00b894", "label": "Network In (bytes)" }
+          ],
+          [
+            "AWS/EC2",
+            "NetworkOut",
+            "InstanceId",
+            "${instance_id}",
+            { "stat": "Sum", "period": 300, "color": "#e17055", "label": "Network Out (bytes)" }
+          ]
+        ],
+        "region": "${aws_region}",
+        "period": 300
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16,
+      "y": 8,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "title": "DynamoDB – Consumed Write Capacity",
+        "view": "timeSeries",
+        "stacked": false,
+        "metrics": [
+          [
+            "AWS/DynamoDB",
+            "ConsumedWriteCapacityUnits",
+            "TableName",
+            "${dynamodb_table_name}",
+            { "stat": "Sum", "period": 300, "color": "#a29bfe", "label": "Write CU" }
+          ],
+          [
+            "AWS/DynamoDB",
+            "ConsumedReadCapacityUnits",
+            "TableName",
+            "${dynamodb_table_name}",
+            { "stat": "Sum", "period": 300, "color": "#fd79a8", "label": "Read CU" }
+          ]
+        ],
+        "region": "${aws_region}",
+        "period": 300,
+        "yAxis": {
+          "left": { "min": 0, "label": "Capacity Units" }
+        }
+      }
+    },
+    {
+      "type": "log",
+      "x": 0,
+      "y": 14,
+      "width": 24,
+      "height": 8,
+      "properties": {
+        "title": "Live Cowrie Intrusion Events – Last 100",
+        "query": "SOURCE '${log_group_name}' | fields @timestamp, @message | sort @timestamp desc | limit 100",
+        "region": "${aws_region}",
+        "view": "table"
+      }
+    },
+    {
+      "type": "log",
+      "x": 0,
+      "y": 22,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Top Attacker IPs (last 1 hour)",
+        "query": "SOURCE '${log_group_name}' | fields @message | filter @message like /\"src_ip\"/ | parse @message '\"src_ip\": \"*\"' as src_ip | stats count(*) as attempts by src_ip | sort attempts desc | limit 20",
+        "region": "${aws_region}",
+        "view": "table"
+      }
+    },
+    {
+      "type": "log",
+      "x": 12,
+      "y": 22,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Most Attempted Usernames (last 1 hour)",
+        "query": "SOURCE '${log_group_name}' | fields @message | filter @message like /login.failed/ | parse @message '\"username\": \"*\"' as username | stats count(*) as attempts by username | sort attempts desc | limit 20",
+        "region": "${aws_region}",
+        "view": "table"
+      }
+    },
+    {
+      "type": "log",
+      "x": 0,
+      "y": 28,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Most Attempted Passwords (last 1 hour)",
+        "query": "SOURCE '${log_group_name}' | fields @message | filter @message like /login.failed/ | parse @message '\"password\": \"*\"' as password | stats count(*) as attempts by password | sort attempts desc | limit 20",
+        "region": "${aws_region}",
+        "view": "table"
+      }
+    },
+    {
+      "type": "log",
+      "x": 12,
+      "y": 28,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Commands Executed by Attackers",
+        "query": "SOURCE '${log_group_name}' | fields @message | filter @message like /command.input/ | parse @message '\"input\": \"*\"' as cmd | stats count(*) as times by cmd | sort times desc | limit 30",
+        "region": "${aws_region}",
+        "view": "table"
+      }
+    },
+    {
+      "type": "alarm",
+      "x": 0,
+      "y": 34,
+      "width": 24,
+      "height": 3,
+      "properties": {
+        "title": "Active Alarms",
+        "alarmArns": []
+      }
+    }
+  ]
+}

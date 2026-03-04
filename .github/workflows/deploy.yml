@@ -1,0 +1,258 @@
+name: Deploy – Terraform Apply
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "terraform/**"
+      - "lambda/**"
+      - "scripts/**"
+      - "dashboards/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+    inputs:
+      terraform_action:
+        description: "Terraform action to run"
+        required: true
+        default: "apply"
+        type: choice
+        options:
+          - apply
+          - plan
+
+# Prevent concurrent infra deployments
+concurrency:
+  group: terraform-deploy
+  cancel-in-progress: false
+
+env:
+  TF_VERSION:     "1.7.5"
+  TF_WORKING_DIR: "./terraform"
+  AWS_REGION:     "us-east-1"
+
+permissions:
+  contents: read
+  id-token:  write   # needed for OIDC auth (optional – remove if using static keys)
+
+jobs:
+  # ──────────────────────────────────────────────
+  #  Validate – runs on every push/PR
+  # ──────────────────────────────────────────────
+  validate:
+    name: Terraform Validate & Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive -diff
+
+      - name: Terraform Init (validate only – no backend)
+        run: |
+          terraform init \
+            -backend=false \
+            -input=false
+        env:
+          TF_CLI_ARGS: ""
+
+      - name: Terraform Validate
+        run: terraform validate -no-color
+
+  # ──────────────────────────────────────────────
+  #  Plan – show what will change
+  # ──────────────────────────────────────────────
+  plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    needs: validate
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+    outputs:
+      plan_exitcode: ${{ steps.plan.outputs.exitcode }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -input=false \
+            -no-color
+        env:
+          TF_VAR_key_pair_name: ${{ secrets.EC2_KEY_PAIR_NAME }}
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          set +e
+          terraform plan \
+            -detailed-exitcode \
+            -no-color \
+            -input=false \
+            -out=tfplan \
+            -var="key_pair_name=${{ secrets.EC2_KEY_PAIR_NAME }}" \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -var="admin_ssh_cidr=${{ secrets.ADMIN_SSH_CIDR || '0.0.0.0/0' }}"
+          echo "exitcode=$?" >> $GITHUB_OUTPUT
+          set -e
+        continue-on-error: true
+
+      - name: Check plan result
+        run: |
+          if [ "${{ steps.plan.outputs.exitcode }}" == "2" ]; then
+            echo "Plan succeeded with changes to apply."
+          elif [ "${{ steps.plan.outputs.exitcode }}" == "0" ]; then
+            echo "Plan succeeded – no changes needed."
+          else
+            echo "Plan FAILED."
+            exit 1
+          fi
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: ${{ env.TF_WORKING_DIR }}/tfplan
+          retention-days: 7
+
+  # ──────────────────────────────────────────────
+  #  Apply – deploy infrastructure to AWS
+  # ──────────────────────────────────────────────
+  apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    needs: plan
+    if: |
+      (github.ref == 'refs/heads/main') &&
+      (needs.plan.outputs.plan_exitcode == '2') &&
+      (github.event.inputs.terraform_action != 'plan')
+    environment:
+      name: production
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: terraform init -input=false -no-color
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
+          path: ${{ env.TF_WORKING_DIR }}
+
+      - name: Terraform Apply
+        run: |
+          terraform apply \
+            -auto-approve \
+            -input=false \
+            -no-color \
+            tfplan
+
+      - name: Capture Outputs
+        id: outputs
+        run: |
+          echo "## 🚀 Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Output | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          terraform output -json | jq -r 'to_entries[] | "| \(.key) | \(.value.value) |"' >> $GITHUB_STEP_SUMMARY || true
+
+      - name: Show honeypot IP
+        run: |
+          HONEYPOT_IP=$(terraform output -raw honeypot_public_ip 2>/dev/null || echo "unavailable")
+          echo "::notice title=Honeypot Public IP::$HONEYPOT_IP"
+          echo "HONEYPOT_IP=$HONEYPOT_IP" >> $GITHUB_ENV
+
+  # ──────────────────────────────────────────────
+  #  Smoke-test – verify critical resources exist
+  # ──────────────────────────────────────────────
+  smoke-test:
+    name: Post-Deploy Smoke Tests
+    runs-on: ubuntu-latest
+    needs: apply
+    if: needs.apply.result == 'success'
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Check EC2 instance running
+        run: |
+          INSTANCE_STATE=$(aws ec2 describe-instances \
+            --filters "Name=tag:Project,Values=cloud-intrusion-platform" \
+                      "Name=instance-state-name,Values=running" \
+            --query "Reservations[0].Instances[0].State.Name" \
+            --output text)
+          echo "EC2 State: $INSTANCE_STATE"
+          [ "$INSTANCE_STATE" = "running" ] || exit 1
+
+      - name: Check DynamoDB table active
+        run: |
+          TABLE_STATUS=$(aws dynamodb describe-table \
+            --table-name intrusion-events \
+            --query "Table.TableStatus" \
+            --output text 2>/dev/null || echo "MISSING")
+          echo "DynamoDB Status: $TABLE_STATUS"
+          [ "$TABLE_STATUS" = "ACTIVE" ] || exit 1
+
+      - name: Check Lambda function state
+        run: |
+          LAMBDA_STATE=$(aws lambda get-function \
+            --function-name cloud-intrusion-platform-log-processor \
+            --query "Configuration.State" \
+            --output text 2>/dev/null || echo "MISSING")
+          echo "Lambda State: $LAMBDA_STATE"
+          [ "$LAMBDA_STATE" = "Active" ] || exit 1
+
+      - name: Smoke test summary
+        run: |
+          echo "## ✅ Smoke Tests Passed" >> $GITHUB_STEP_SUMMARY
+          echo "- EC2 honeypot: running" >> $GITHUB_STEP_SUMMARY
+          echo "- DynamoDB: active" >> $GITHUB_STEP_SUMMARY
+          echo "- Lambda: active" >> $GITHUB_STEP_SUMMARY

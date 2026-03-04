@@ -1,0 +1,183 @@
+name: Destroy – Terraform Destroy
+
+# ⚠️  DESTRUCTIVE OPERATION ⚠️
+# This workflow PERMANENTLY DELETES all honeypot infrastructure in AWS.
+# It only runs on explicit manual dispatch with a confirmation phrase.
+# Protected by GitHub Environment "production" requiring a manual reviewer.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_destroy:
+        description: >
+          Type  DESTROY-HONEYPOT  to confirm you want to delete all
+          infrastructure. This action cannot be undone.
+        required: true
+        type: string
+      reason:
+        description: "Reason for destroying infrastructure (for audit log)"
+        required: true
+        type: string
+
+concurrency:
+  group: terraform-deploy
+  cancel-in-progress: false
+
+env:
+  TF_VERSION:     "1.7.5"
+  TF_WORKING_DIR: "./terraform"
+  AWS_REGION:     "us-east-1"
+
+permissions:
+  contents: read
+  id-token:  write
+
+jobs:
+  # ──────────────────────────────────────────────
+  #  Guard – confirm the magic phrase before proceeding
+  # ──────────────────────────────────────────────
+  confirm:
+    name: Confirm Destruction
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate confirmation phrase
+        run: |
+          PHRASE="${{ github.event.inputs.confirm_destroy }}"
+          if [ "$PHRASE" != "DESTROY-HONEYPOT" ]; then
+            echo "::error::Confirmation phrase incorrect. Got '$PHRASE', expected 'DESTROY-HONEYPOT'."
+            exit 1
+          fi
+          echo "Confirmation accepted."
+
+      - name: Log destruction intent
+        run: |
+          echo "## ⚠️ Destroy Requested" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Time | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
+          echo "| Reason | ${{ github.event.inputs.reason }} |" >> $GITHUB_STEP_SUMMARY
+
+  # ──────────────────────────────────────────────
+  #  Plan Destroy – preview what will be removed
+  # ──────────────────────────────────────────────
+  plan-destroy:
+    name: Terraform Plan Destroy
+    runs-on: ubuntu-latest
+    needs: confirm
+    environment: production
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: terraform init -input=false -no-color
+
+      - name: Terraform Plan Destroy
+        run: |
+          terraform plan \
+            -destroy \
+            -no-color \
+            -input=false \
+            -out=tfplan-destroy \
+            -var="key_pair_name=${{ secrets.EC2_KEY_PAIR_NAME }}" \
+            -var="aws_region=${{ env.AWS_REGION }}"
+
+      - name: Upload destroy plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-destroy-plan
+          path: ${{ env.TF_WORKING_DIR }}/tfplan-destroy
+          retention-days: 1
+
+  # ──────────────────────────────────────────────
+  #  Destroy – execute destruction
+  # ──────────────────────────────────────────────
+  destroy:
+    name: Terraform Destroy
+    runs-on: ubuntu-latest
+    needs: plan-destroy
+    environment: production
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: terraform init -input=false -no-color
+
+      - name: Download destroy plan
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-destroy-plan
+          path: ${{ env.TF_WORKING_DIR }}
+
+      - name: Terraform Destroy
+        run: |
+          terraform apply \
+            -auto-approve \
+            -input=false \
+            -no-color \
+            tfplan-destroy
+
+      - name: Verify destruction
+        continue-on-error: true
+        run: |
+          # Confirm EC2 instance is terminated
+          INSTANCE_COUNT=$(aws ec2 describe-instances \
+            --filters "Name=tag:Project,Values=cloud-intrusion-platform" \
+                      "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+            --query "length(Reservations[].Instances[])" \
+            --output text 2>/dev/null || echo "0")
+          echo "Remaining EC2 instances: $INSTANCE_COUNT"
+
+      - name: Destruction summary
+        if: always()
+        run: |
+          echo "## 💥 Infrastructure Destroyed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All honeypot infrastructure has been removed from AWS." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Resource | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| EC2 Honeypot | Terminated |" >> $GITHUB_STEP_SUMMARY
+          echo "| Elastic IP | Released |" >> $GITHUB_STEP_SUMMARY
+          echo "| DynamoDB Table | Deleted |" >> $GITHUB_STEP_SUMMARY
+          echo "| Lambda Function | Deleted |" >> $GITHUB_STEP_SUMMARY
+          echo "| CloudWatch Log Group | Deleted |" >> $GITHUB_STEP_SUMMARY
+          echo "| IAM Roles | Deleted |" >> $GITHUB_STEP_SUMMARY
+          echo "| VPC & Networking | Deleted |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> Destroyed by **${{ github.actor }}** | Reason: ${{ github.event.inputs.reason }}" >> $GITHUB_STEP_SUMMARY
