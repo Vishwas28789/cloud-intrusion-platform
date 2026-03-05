@@ -262,17 +262,6 @@
         "region": "${aws_region}",
         "view": "table"
       }
-    },
-    {
-      "type": "alarm",
-      "x": 0,
-      "y": 34,
-      "width": 24,
-      "height": 3,
-      "properties": {
-        "title": "Active Alarms",
-        "alarms": []
-      }
     }
   ]
 }
