@@ -5,7 +5,6 @@ aws_region             = "us-east-1"
 environment            = "production"
 project_name           = "cloud-intrusion-platform"
 honeypot_instance_type = "t2.micro"
-key_pair_name          = "my-ec2-keypair"          # REQUIRED: name of existing EC2 key pair
 admin_ssh_cidr         = "203.0.113.5/32"          # Replace with your IP
 dynamodb_table_name    = "intrusion-events"
 log_retention_days     = 30

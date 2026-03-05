@@ -22,11 +22,6 @@ variable "honeypot_instance_type" {
   default     = "t2.micro"
 }
 
-variable "key_pair_name" {
-  description = "Name of an existing EC2 key pair for SSH access to the honeypot"
-  type        = string
-}
-
 variable "admin_ssh_cidr" {
   description = "CIDR block allowed to SSH into the honeypot for management (your IP/32)"
   type        = string

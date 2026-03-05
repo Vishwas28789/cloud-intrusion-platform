@@ -103,8 +103,6 @@ jobs:
           terraform init \
             -input=false \
             -no-color
-        env:
-          TF_VAR_key_pair_name: ${{ secrets.EC2_KEY_PAIR_NAME }}
 
       - name: Terraform Plan
         id: plan
@@ -115,7 +113,6 @@ jobs:
             -no-color \
             -input=false \
             -out=tfplan \
-            -var="key_pair_name=${{ secrets.EC2_KEY_PAIR_NAME }}" \
             -var="aws_region=${{ env.AWS_REGION }}" \
             -var="admin_ssh_cidr=${{ secrets.ADMIN_SSH_CIDR || '0.0.0.0/0' }}"
           echo "exitcode=$?" >> $GITHUB_OUTPUT

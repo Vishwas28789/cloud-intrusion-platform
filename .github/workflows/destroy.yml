@@ -97,7 +97,6 @@ jobs:
             -no-color \
             -input=false \
             -out=tfplan-destroy \
-            -var="key_pair_name=${{ secrets.EC2_KEY_PAIR_NAME }}" \
             -var="aws_region=${{ env.AWS_REGION }}"
 
       - name: Upload destroy plan

@@ -200,6 +200,24 @@ resource "aws_cloudwatch_log_stream" "cowrie_stream" {
 }
 
 # ─────────────────────────────────────────────────────────────
+#  SSH Key Pair (auto-generated – no manual input required)
+# ─────────────────────────────────────────────────────────────
+
+resource "tls_private_key" "honeypot" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+resource "aws_key_pair" "honeypot" {
+  key_name   = "${var.project_name}-keypair"
+  public_key = tls_private_key.honeypot.public_key_openssh
+
+  tags = {
+    Name = "${var.project_name}-keypair"
+  }
+}
+
+# ─────────────────────────────────────────────────────────────
 #  EC2 Honeypot Instance
 # ─────────────────────────────────────────────────────────────
 
@@ -207,7 +225,7 @@ resource "aws_instance" "honeypot" {
   ami                    = data.aws_ami.amazon_linux_2023.id
   instance_type          = var.honeypot_instance_type
   subnet_id              = aws_subnet.honeypot_public_subnet.id
-  key_name               = var.key_pair_name
+  key_name               = aws_key_pair.honeypot.key_name
   iam_instance_profile   = aws_iam_instance_profile.honeypot_profile.name
   vpc_security_group_ids = [aws_security_group.honeypot_sg.id]
 

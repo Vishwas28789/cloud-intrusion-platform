@@ -37,3 +37,14 @@ output "vpc_id" {
   description = "VPC ID for the honeypot network"
   value       = aws_vpc.honeypot_vpc.id
 }
+
+output "honeypot_key_pair_name" {
+  description = "Name of the auto-generated EC2 key pair"
+  value       = aws_key_pair.honeypot.key_name
+}
+
+output "honeypot_private_key_pem" {
+  description = "PEM-encoded private key for SSH access to the honeypot (sensitive)"
+  value       = tls_private_key.honeypot.private_key_pem
+  sensitive   = true
+}
