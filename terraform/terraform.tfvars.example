@@ -1,12 +1,8 @@
-# Terraform variable values – copy this file to terraform.tfvars and fill in values.
-# Do NOT commit terraform.tfvars to source control (it is in .gitignore).
+# All variables have safe defaults - no manual input required.
+# Copy to terraform.tfvars and override only what you need.
+# terraform apply -auto-approve runs without any prompts.
 
-aws_region             = "us-east-1"
-environment            = "production"
-project_name           = "cloud-intrusion-platform"
-honeypot_instance_type = "t2.micro"
-admin_ssh_cidr         = "203.0.113.5/32"          # Replace with your IP
-dynamodb_table_name    = "intrusion-events"
-log_retention_days     = 30
-lambda_memory_mb       = 128
-lambda_timeout_seconds = 30
+aws_region          = "us-east-1"
+environment         = "production"
+project_name        = "cloud-intrusion-platform"
+dynamodb_table_name = "intrusion-events"

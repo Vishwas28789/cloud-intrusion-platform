@@ -113,8 +113,7 @@ jobs:
             -no-color \
             -input=false \
             -out=tfplan \
-            -var="aws_region=${{ env.AWS_REGION }}" \
-            -var="admin_ssh_cidr=${{ secrets.ADMIN_SSH_CIDR || '0.0.0.0/0' }}"
+            -var="aws_region=${{ env.AWS_REGION }}"
           echo "exitcode=$?" >> $GITHUB_OUTPUT
           set -e
         continue-on-error: true

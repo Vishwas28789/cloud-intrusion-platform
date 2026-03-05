@@ -80,9 +80,9 @@ resource "aws_security_group" "honeypot_sg" {
   description = "Security group for honeypot EC2 instance"
   vpc_id      = aws_vpc.honeypot_vpc.id
 
-  # Fake SSH (port 22) – Cowrie listens here; lures attackers
+  # Fake SSH (port 22) - Cowrie listens here; lures attackers
   ingress {
-    description = "Honeypot SSH bait – open to internet"
+    description = "Honeypot SSH bait - open to internet"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
@@ -98,13 +98,13 @@ resource "aws_security_group" "honeypot_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Real management SSH on port 2222 (restricted to admin IP)
+  # Real management SSH on port 2222
   ingress {
     description = "Admin SSH for management"
     from_port   = 2222
     to_port     = 2222
     protocol    = "tcp"
-    cidr_blocks = [var.admin_ssh_cidr]
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
@@ -187,7 +187,7 @@ resource "aws_iam_instance_profile" "honeypot_profile" {
 
 resource "aws_cloudwatch_log_group" "honeypot_logs" {
   name              = "/honeypot/${var.project_name}/cowrie"
-  retention_in_days = var.log_retention_days
+  retention_in_days = 30
 
   tags = {
     Name = "${var.project_name}-log-group"
@@ -223,7 +223,7 @@ resource "aws_key_pair" "honeypot" {
 
 resource "aws_instance" "honeypot" {
   ami                    = data.aws_ami.amazon_linux_2023.id
-  instance_type          = var.honeypot_instance_type
+  instance_type          = "t2.micro"
   subnet_id              = aws_subnet.honeypot_public_subnet.id
   key_name               = aws_key_pair.honeypot.key_name
   iam_instance_profile   = aws_iam_instance_profile.honeypot_profile.name
@@ -406,8 +406,8 @@ resource "aws_lambda_function" "log_processor" {
   runtime          = "python3.12"
   filename         = data.archive_file.lambda_zip.output_path
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
-  memory_size      = var.lambda_memory_mb
-  timeout          = var.lambda_timeout_seconds
+  memory_size      = 128
+  timeout          = 30
 
   environment {
     variables = {
@@ -415,10 +415,6 @@ resource "aws_lambda_function" "log_processor" {
       LOG_GROUP_NAME      = aws_cloudwatch_log_group.honeypot_logs.name
       AWS_ACCOUNT_ID      = data.aws_caller_identity.current.account_id
     }
-  }
-
-  tracing_config {
-    mode = "Active"
   }
 
   tags = {
@@ -473,7 +469,7 @@ resource "aws_cloudwatch_metric_alarm" "high_intrusion_rate" {
   period              = 300
   statistic           = "Sum"
   threshold           = 100
-  alarm_description   = "More than 100 honeypot events in 5 minutes – possible attack campaign"
+  alarm_description   = "More than 100 honeypot events in 5 minutes - possible attack campaign"
   treat_missing_data  = "notBreaching"
 
   dimensions = {
