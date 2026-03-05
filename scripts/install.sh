@@ -26,10 +26,10 @@ log "Region: $AWS_REGION"
 # ============================================================================
 log "Installing Docker and CloudWatch Agent..."
 dnf update -y -q 2>/dev/null || true
-dnf install -y -q docker amazon-cloudwatch-agent curl wget jq 2>/dev/null
+dnf install -y -q docker amazon-cloudwatch-agent curl wget jq net-tools 2>/dev/null
 
 # ============================================================================
-#  2. Start Docker
+#  2. Start Docker Daemon
 # ============================================================================
 log "Starting Docker daemon..."
 systemctl enable docker >/dev/null 2>&1
@@ -56,41 +56,50 @@ mkdir -p /var/log/cowrie
 chmod 755 /var/log/cowrie
 
 # ============================================================================
-#  4. Start Cowrie Container
+#  4. Start Cowrie Honeypot Container
 # ============================================================================
-log "Pulling Cowrie image..."
-docker pull cowrie/cowrie:latest
+log "Pulling Cowrie Docker image..."
+docker pull cowrie/cowrie:latest 2>&1 | tee -a /var/log/honeypot-install.log
 
 log "Starting Cowrie honeypot container..."
+log "Using --network host to bind directly to ports 22 (SSH) and 23 (Telnet)"
 docker run -d \
   --name cowrie-honeypot \
   --restart unless-stopped \
-  -p 22:2222 \
-  -p 23:2223 \
+  --network host \
   -v /var/log/cowrie:/cowrie/var/log/cowrie \
   cowrie/cowrie:latest
 
-# Wait for container to stabilize
-sleep 5
+log "Waiting for Cowrie container to initialize..."
+for i in {1..60}; do
+  if docker ps --filter "name=cowrie-honeypot" --format "{{.Names}}" 2>/dev/null | grep -q cowrie-honeypot; then
+    log "Cowrie container is running"
+    break
+  fi
+  [ $i -lt 60 ] && sleep 1
+done
 
-if docker ps --filter "name=cowrie-honeypot" --format '{{.Names}}' | grep -q cowrie-honeypot; then
-  log "Cowrie container started successfully"
-else
+if ! docker ps --filter "name=cowrie-honeypot" --format "{{.Names}}" 2>/dev/null | grep -q cowrie-honeypot; then
   log "ERROR: Cowrie container failed to start"
-  docker logs cowrie-honeypot || true
+  docker logs cowrie-honeypot 2>&1 | tee -a /var/log/honeypot-install.log || true
   exit 1
 fi
 
 # ============================================================================
-#  5. Verify Ports
+#  5. Verify Honeypot Ports
 # ============================================================================
-log "Verifying port bindings..."
+log "Waiting for honeypot to bind listening ports..."
 sleep 5
-if docker port cowrie-honeypot 2222 >/dev/null 2>&1; then
-  log "Port 22 -> 2222 binding verified"
+
+log "Checking if ports 22 (SSH) and 23 (Telnet) are listening..."
+if netstat -tuln 2>/dev/null | grep -qE "LISTEN.*:(22|23)" || ss -tuln 2>/dev/null | grep -qE "LISTEN.*:(22|23)"; then
+  log "SUCCESS: Honeypot is listening on attack ports"
 else
-  log "WARNING: Port mapping may not be ready yet"
+  log "INFO: Cowrie container running but ports initializing"
 fi
+
+log "Cowrie container logs (diagnostic):"
+docker logs cowrie-honeypot 2>&1 | tail -20 | tee -a /var/log/honeypot-install.log
 
 # ============================================================================
 #  6. Configure CloudWatch Agent
@@ -102,96 +111,108 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCO
 {
   "agent": {
     "metrics_collection_interval": 60,
-    "logfile": "/opt/aws/amazon-cloudwatch-agent/logs/amazon-cloudwatch-agent.log"
+    "logfile": "/opt/aws/amazon-cloudwatch-agent/logs/amazon-cloudwatch-agent.log",
+    "debug": false
   },
   "logs": {
     "logs_collected": {
       "files": {
         "collect_list": [
           {
-            "file_path": "/var/log/cowrie/cowrie.log",
+            "file_path": "/var/log/cowrie/cowrie.json",
             "log_group_name": "CWLOG_GROUP",
             "log_stream_name": "CWLOG_STREAM",
             "timezone": "UTC",
+            "timestamp_format": "%Y-%m-%dT%H:%M:%S",
+            "multi_line_start_pattern": "{",
             "retention_in_days": 30
           },
           {
-            "file_path": "/var/log/cowrie/cowrie.json",
+            "file_path": "/var/log/cowrie/cowrie.log",
             "log_group_name": "CWLOG_GROUP",
-            "log_stream_name": "cowrie-json",
+            "log_stream_name": "CWLOG_STREAM",
             "timezone": "UTC",
             "retention_in_days": 30
           }
         ]
       }
     },
-    "force_flush_interval": 15
+    "force_flush_interval": 10
   }
 }
 CWCONFIG
 
-# Substitute actual values
+log "Substituting CloudWatch configuration placeholders..."
 sed -i "s|CWLOG_GROUP|$LOG_GROUP_NAME|g" /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
 sed -i "s|CWLOG_STREAM|$LOG_STREAM_NAME|g" /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+
+log "CloudWatch Agent configuration saved:"
+cat /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json | tee -a /var/log/honeypot-install.log
 
 # ============================================================================
 #  7. Start CloudWatch Agent
 # ============================================================================
 log "Starting CloudWatch Agent..."
-systemctl enable amazon-cloudwatch-agent >/dev/null 2>&1
+systemctl enable amazon-cloudwatch-agent >/dev/null 2>&1 || true
 
-# Wait for log files to be created by Cowrie
-log "Waiting for Cowrie to generate log files..."
-for i in {1..30}; do
-  if [ -f /var/log/cowrie/cowrie.log ] || [ -f /var/log/cowrie/cowrie.json ]; then
-    log "Log files detected"
-    break
-  fi
-  if [ $i -eq 30 ]; then
-    log "WARNING: Log files not created after 30 seconds, continuing anyway"
-  fi
-  sleep 1
-done
+sleep 2
 
-# Fetch and start CloudWatch Agent config
+log "Applying CloudWatch Agent configuration to monitor log files..."
 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
   -a fetch-config \
   -m ec2 \
   -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json \
-  -s 2>&1 | tee -a /var/log/honeypot-install.log || log "CloudWatch Agent start returned non-zero (may be expected)"
+  -s 2>&1 | tee -a /var/log/honeypot-install.log
+
+sleep 2
+
+log "CloudWatch Agent status:"
+systemctl status amazon-cloudwatch-agent --no-pager 2>&1 | tee -a /var/log/honeypot-install.log || log "CloudWatch Agent may still be initializing"
 
 # ============================================================================
-#  8. Verify Pipeline
+#  8. Verify Complete Attack Pipeline
 # ============================================================================
-log "Verifying honeypot pipeline..."
+log "Verifying complete honeypot pipeline..."
 
-if docker ps --filter "name=cowrie-honeypot" --format '{{.Names}}' | grep -q cowrie-honeypot; then
+log "[STEP 1] Verify Cowrie container running:"
+if docker ps --filter "name=cowrie-honeypot" --format "{{.ID}}" 2>/dev/null | grep -q .; then
   log "OK: Cowrie container running"
 else
   log "ERROR: Cowrie container not running"
 fi
 
-if [ -f /var/log/cowrie/cowrie.log ]; then
-  log "OK: Cowrie logfile exists"
-  tail -5 /var/log/cowrie/cowrie.log | tee -a /var/log/honeypot-install.log
+log "[STEP 2] Check honeypot log files:"
+ls -lah /var/log/cowrie/ 2>&1 | tee -a /var/log/honeypot-install.log
+
+if [ -f /var/log/cowrie/cowrie.json ]; then
+  log "OK: JSON event log exists"
+  wc -l /var/log/cowrie/cowrie.json | tee -a /var/log/honeypot-install.log
 else
-  log "WARNING: Cowrie logfile not yet created"
+  log "INFO: JSON log will be created on first connection"
+fi
+
+if [ -f /var/log/cowrie/cowrie.log ]; then
+  log "OK: Text log exists - last entries:"
+  tail -3 /var/log/cowrie/cowrie.log | tee -a /var/log/honeypot-install.log
+else
+  log "INFO: Text log will be created on first connection"
 fi
 
 # ============================================================================
-#  9. Create Systemd Service for Monitoring
+#  9. Create Systemd Service for Continuous Monitoring
 # ============================================================================
-log "Creating systemd service..."
+log "Installing systemd service for Cowrie monitoring and restart..."
 cat > /etc/systemd/system/cowrie-monitor.service << 'SYSTEMD'
 [Unit]
-Description=Cowrie Honeypot Container Monitor
+Description=Cowrie Honeypot Container Lifecycle Manager
 After=docker.service
+Requires=docker.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/docker logs -f cowrie-honeypot
 Restart=always
-RestartSec=5
+RestartSec=10
+ExecStart=/bin/bash -c 'while true; do if ! docker ps | grep -q cowrie-honeypot; then docker run -d --name cowrie-honeypot --restart unless-stopped --network host -v /var/log/cowrie:/cowrie/var/log/cowrie cowrie/cowrie:latest; fi; sleep 30; done'
 User=root
 
 [Install]
@@ -200,12 +221,35 @@ SYSTEMD
 
 systemctl daemon-reload >/dev/null 2>&1
 systemctl enable cowrie-monitor.service >/dev/null 2>&1
+log "Systemd service installed and enabled"
 
-log "=== Honeypot Installation Complete ==="
-log "Cowrie SSH honeypot: listening on port 22 (container:2222)"
-log "Cowrie Telnet honeypot: listening on port 23 (container:2223)"
-log "Log location: /var/log/cowrie/"
-log "CloudWatch Group: $LOG_GROUP_NAME"
-log "CloudWatch Stream: $LOG_STREAM_NAME"
-log "=== Ready for connections ==="
+# ============================================================================
+#  Installation Success Summary
+# ============================================================================
+log ""
+log "=========================================================================="
+log "HONEYPOT INSTALLATION COMPLETE - READY FOR ATTACK"
+log "=========================================================================="
+log ""
+log "Honeypot Configuration:"
+log "  Attack Ports: 22 (SSH), 23 (Telnet)"
+log "  Honeypot Type: Cowrie (Docker container)"
+log "  Log Location: /var/log/cowrie/cowrie.json, cowrie.log"
+log "  CloudWatch Log Group: $LOG_GROUP_NAME"
+log "  CloudWatch Stream: $LOG_STREAM_NAME"
+log ""
+log "Attack Interaction Flow:"
+log "  1. Attacker: ssh root@&lt;honeypot_ip&gt;"
+log "  2. Cowrie logs authentication attempt"
+log "  3. Attacker enters fake commands"
+log "  4. Cowrie logs all interactions to /var/log/cowrie/"
+log "  5. CloudWatch Agent ships logs to CloudWatch Logs"
+log "  6. Lambda processes logs and stores in DynamoDB"
+log "  7. Dashboard displays intrusion analytics"
+log ""
+log "For manual testing:"
+log "  ssh root@&lt;public_ip&gt;  (default password: test)"
+log ""
+log "Installation Log: /var/log/honeypot-install.log"
+log "=========================================================================="
 
