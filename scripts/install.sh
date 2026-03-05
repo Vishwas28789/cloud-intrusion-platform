@@ -22,13 +22,25 @@ log "Log Stream: $LOG_STREAM_NAME"
 log "Region: $AWS_REGION"
 
 # ============================================================================
-#  1. Disable Native SSH to Allow Cowrie to Listen on Port 22
+#  1. Completely Disable Native SSH to Free Port 22 for Cowrie
 # ============================================================================
-log "Stopping and disabling native SSH daemon..."
+log "CRITICAL: Disabling native SSH daemon completely..."
 systemctl stop sshd 2>/dev/null || true
+systemctl stop ssh 2>/dev/null || true
 systemctl disable sshd 2>/dev/null || true
+systemctl disable ssh 2>/dev/null || true
 systemctl mask sshd 2>/dev/null || true
-log "Native SSH disabled - Cowrie will now handle SSH on port 22"
+systemctl mask ssh 2>/dev/null || true
+
+# Kill any remaining SSH processes
+pkill -f sshd || true
+sleep 2
+
+log "Native SSH fully disabled - Port 22 is now free for Cowrie honeypot"
+log "Verifying sshd is not listening..."
+if netstat -tuln 2>/dev/null | grep -q ":22 " || ss -tuln 2>/dev/null | grep -q ":22 "; then
+  log "WARNING: Something still listening on port 22, will be replaced by Cowrie"
+fi
 
 # ============================================================================
 #  2. Update System & Install Dependencies
@@ -100,18 +112,29 @@ fi
 # ============================================================================
 #  5. Verify Honeypot Ports
 # ============================================================================
+# ============================================================================
+#  5. Verify Honeypot Ports
+# ============================================================================
 log "Waiting for honeypot to bind listening ports..."
 sleep 5
 
 log "Checking if ports 22 (SSH) and 23 (Telnet) are listening..."
-if netstat -tuln 2>/dev/null | grep -qE "LISTEN.*:(22|23)" || ss -tuln 2>/dev/null | grep -qE "LISTEN.*:(22|23)"; then
-  log "SUCCESS: Honeypot is listening on attack ports"
-else
-  log "INFO: Cowrie container running but ports initializing"
-fi
+for attempt in {1..10}; do
+  if netstat -tuln 2>/dev/null | grep -qE "LISTEN.*:(22|23)" || ss -tuln 2>/dev/null | grep -qE "LISTEN.*:(22|23)"; then
+    log "SUCCESS: Honeypot is listening on port 22 (SSH) and/or 23 (Telnet)"
+    netstat -tuln 2>/dev/null | grep -E "LISTEN.*:(22|23)" || ss -tuln 2>/dev/null | grep -E "LISTEN.*:(22|23)"
+    break
+  fi
+  if [ $attempt -lt 10 ]; then
+    log "Waiting for ports to be ready... (attempt $attempt/10)"
+    sleep 2
+  else
+    log "WARNING: Ports may still be initializing"
+  fi
+done
 
 log "Cowrie container logs (diagnostic):"
-docker logs cowrie-honeypot 2>&1 | tail -20 | tee -a /var/log/honeypot-install.log
+docker logs cowrie-honeypot 2>&1 | tail -30 | tee -a /var/log/honeypot-install.log
 
 # ============================================================================
 #  6. Configure CloudWatch Agent
@@ -224,7 +247,7 @@ Requires=docker.service
 Type=simple
 Restart=always
 RestartSec=10
-ExecStart=/bin/bash -c 'while true; do if ! docker ps | grep -q cowrie-honeypot; then docker run -d --name cowrie-honeypot --restart unless-stopped --network host -v /var/log/cowrie:/cowrie/var/log/cowrie cowrie/cowrie:latest; fi; sleep 30; done'
+ExecStart=/bin/bash -c 'while true; do if ! docker ps | grep -q cowrie-honeypot; then docker run -d --name cowrie-honeypot --restart unless-stopped -p 22:2222 -p 23:2223 -v /cowrie/log:/cowrie/var/log/cowrie cowrie/cowrie:latest; fi; sleep 30; done'
 User=root
 
 [Install]
