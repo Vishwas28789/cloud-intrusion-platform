@@ -271,7 +271,7 @@
       "height": 3,
       "properties": {
         "title": "Active Alarms",
-        "alarmArns": []
+        "alarms": []
       }
     }
   ]
