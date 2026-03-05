@@ -89,7 +89,10 @@ if ! docker run -d \
   --restart always \
   -p 22:2222 \
   -p 23:2223 \
-  -v /cowrie/log:/cowrie/var/log/cowrie \
+  --log-driver awslogs \
+  --log-opt awslogs-group="$LOG_GROUP" \
+  --log-opt awslogs-stream="$LOG_STREAM" \
+  --log-opt awslogs-region="$REGION" \
   cowrie/cowrie:latest >> "$LOG_FILE" 2>&1; then
   fail "Failed to start Cowrie container"
 fi
@@ -100,45 +103,12 @@ sleep 3
 if ! docker ps 2>/dev/null | grep -q cowrie-honeypot; then
   fail "Cowrie container is not running after start"
 fi
-log "✓ Cowrie container started and running"
+log "✓ Cowrie container started and running with CloudWatch logging"
 
-# [7/8] CONFIGURE CLOUDWATCH AGENT
-log "[STEP 7/8] Configuring CloudWatch Agent..."
-mkdir -p /opt/aws/amazon-cloudwatch-agent/etc || fail "Failed to create CloudWatch config dir"
-
-cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCONFIG'
-{
-  "agent": { "metrics_collection_interval": 60 },
-  "logs": {
-    "logs_collected": {
-      "files": {
-        "collect_list": [
-          {
-            "file_path": "/cowrie/log/cowrie.json",
-            "log_group_name": "__LOG_GROUP__",
-            "log_stream_name": "__LOG_STREAM__",
-            "timezone": "UTC"
-          },
-          {
-            "file_path": "/cowrie/log/cowrie.log",
-            "log_group_name": "__LOG_GROUP__",
-            "log_stream_name": "__LOG_STREAM__",
-            "timezone": "UTC"
-          }
-        ]
-      }
-    },
-    "force_flush_interval": 10
-  }
-}
-CWCONFIG
-
-sed -i "s|__LOG_GROUP__|$LOG_GROUP|g" /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
-sed -i "s|__LOG_STREAM__|$LOG_STREAM|g" /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
-
-systemctl enable amazon-cloudwatch-agent >> "$LOG_FILE" 2>&1 || fail "Failed to enable CloudWatch Agent"
-systemctl start amazon-cloudwatch-agent >> "$LOG_FILE" 2>&1 || fail "Failed to start CloudWatch Agent"
-log "✓ CloudWatch Agent configured and started"
+# [7/8] VERIFY CLOUDWATCH SETUP
+log "[STEP 7/8] Verifying CloudWatch setup..."
+# No need to run CloudWatch Agent since Docker logs go directly to CloudWatch
+log "✓ Docker will send all logs directly to CloudWatch Log Group: $LOG_GROUP"
 
 # [8/8] VERIFY EVERYTHING
 log "[STEP 8/8] Final verification..."
