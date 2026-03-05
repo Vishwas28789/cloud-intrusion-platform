@@ -230,8 +230,8 @@ resource "aws_instance" "honeypot" {
   vpc_security_group_ids = [aws_security_group.honeypot_sg.id]
 
   root_block_device {
-    volume_size           = 8
-    volume_type           = "gp2"
+    volume_size           = 30
+    volume_type           = "gp3"
     delete_on_termination = true
     encrypted             = true
   }
@@ -253,10 +253,6 @@ resource "aws_instance" "honeypot" {
   tags = {
     Name = "${var.project_name}-honeypot"
     Role = "honeypot"
-  }
-
-  lifecycle {
-    create_before_destroy = true
   }
 }
 
@@ -413,7 +409,7 @@ resource "aws_lambda_function" "log_processor" {
     variables = {
       DYNAMODB_TABLE_NAME = aws_dynamodb_table.intrusion_events.name
       LOG_GROUP_NAME      = aws_cloudwatch_log_group.honeypot_logs.name
-      AWS_ACCOUNT_ID      = data.aws_caller_identity.current.account_id
+      ACCOUNT_ID          = data.aws_caller_identity.current.account_id
     }
   }
 
