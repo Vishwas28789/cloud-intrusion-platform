@@ -56,14 +56,18 @@ log "Starting Docker daemon..."
 systemctl enable docker >/dev/null 2>&1
 systemctl start docker >/dev/null 2>&1
 
-# Wait for Docker to be ready
-for i in {1..30}; do
+# Wait for Docker to be ready - with detailed logging
+log "Waiting for Docker daemon to be ready..."
+for i in {1..60}; do
   if docker info >/dev/null 2>&1; then
-    log "Docker is ready"
+    log "Docker is ready (attempt $i/60)"
+    docker version 2>&1 | head -2 | tee -a /var/log/honeypot-install.log
     break
   fi
-  if [ $i -eq 30 ]; then
-    log "ERROR: Docker failed to start"
+  if [ $i -eq 60 ]; then
+    log "ERROR: Docker failed to start after 60 seconds"
+    systemctl status docker 2>&1 | tee -a /var/log/honeypot-install.log
+    journalctl -u docker -n 30 2>&1 | tee -a /var/log/honeypot-install.log
     exit 1
   fi
   sleep 1
@@ -80,32 +84,55 @@ log "Log directory created: /cowrie/log"
 # ============================================================================
 #  4. Start Cowrie Honeypot Container
 # ============================================================================
-log "Pulling Cowrie Docker image..."
-docker pull cowrie/cowrie:latest 2>&1 | tee -a /var/log/honeypot-install.log
+# ============================================================================
+#  4. Start Cowrie Honeypot Container
+# ============================================================================
+log "Pulling Cowrie Docker image (this may take 1-2 minutes)..."
+for attempt in {1..3}; do
+  if docker pull cowrie/cowrie:latest 2>&1 | tee -a /var/log/honeypot-install.log; then
+    log "Cowrie image pulled successfully"
+    break
+  else
+    log "Image pull attempt $attempt failed, retrying..."
+    sleep 10
+  fi
+done
 
 log "Starting Cowrie honeypot container..."
 log "Port mapping: Host 22 -> Container 2222 (SSH), Host 23 -> Container 2223 (Telnet)"
 log "Log volume: Host /cowrie/log -> Container /cowrie/var/log/cowrie"
+
+# Remove old container if it exists
+docker rm -f cowrie-honeypot 2>/dev/null || true
+
 docker run -d \
   --name cowrie-honeypot \
   --restart unless-stopped \
   -p 22:2222 \
   -p 23:2223 \
   -v /cowrie/log:/cowrie/var/log/cowrie \
-  cowrie/cowrie:latest
+  cowrie/cowrie:latest 2>&1 | tee -a /var/log/honeypot-install.log
+
+if [ $? -ne 0 ]; then
+  log "ERROR: Failed to start Cowrie container"
+  exit 1
+fi
 
 log "Waiting for Cowrie container to initialize..."
 for i in {1..60}; do
   if docker ps --filter "name=cowrie-honeypot" --format "{{.Names}}" 2>/dev/null | grep -q cowrie-honeypot; then
-    log "Cowrie container is running"
+    log "Cowrie container is running (attempt $i/60)"
     break
   fi
   [ $i -lt 60 ] && sleep 1
 done
 
 if ! docker ps --filter "name=cowrie-honeypot" --format "{{.Names}}" 2>/dev/null | grep -q cowrie-honeypot; then
-  log "ERROR: Cowrie container failed to start"
-  docker logs cowrie-honeypot 2>&1 | tee -a /var/log/honeypot-install.log || true
+  log "ERROR: Cowrie container failed to start after 60 seconds"
+  log "Docker ps output:"
+  docker ps -a 2>&1 | tee -a /var/log/honeypot-install.log
+  log "Container logs:"
+  docker logs cowrie-honeypot 2>&1 | tail -50 | tee -a /var/log/honeypot-install.log
   exit 1
 fi
 
