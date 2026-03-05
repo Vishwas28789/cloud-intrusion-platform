@@ -22,7 +22,16 @@ log "Log Stream: $LOG_STREAM_NAME"
 log "Region: $AWS_REGION"
 
 # ============================================================================
-#  1. Update System & Install Dependencies
+#  1. Disable Native SSH to Allow Cowrie to Listen on Port 22
+# ============================================================================
+log "Stopping and disabling native SSH daemon..."
+systemctl stop sshd 2>/dev/null || true
+systemctl disable sshd 2>/dev/null || true
+systemctl mask sshd 2>/dev/null || true
+log "Native SSH disabled - Cowrie will now handle SSH on port 22"
+
+# ============================================================================
+#  2. Update System & Install Dependencies
 # ============================================================================
 log "Installing Docker and CloudWatch Agent..."
 dnf update -y -q 2>/dev/null || true
@@ -51,9 +60,10 @@ done
 # ============================================================================
 #  3. Create Log Directories
 # ============================================================================
-log "Creating log directories..."
-mkdir -p /var/log/cowrie
-chmod 755 /var/log/cowrie
+log "Creating Cowrie log directories on host..."
+mkdir -p /cowrie/log
+chmod 755 /cowrie/log
+log "Log directory created: /cowrie/log"
 
 # ============================================================================
 #  4. Start Cowrie Honeypot Container
@@ -62,12 +72,14 @@ log "Pulling Cowrie Docker image..."
 docker pull cowrie/cowrie:latest 2>&1 | tee -a /var/log/honeypot-install.log
 
 log "Starting Cowrie honeypot container..."
-log "Using --network host to bind directly to ports 22 (SSH) and 23 (Telnet)"
+log "Port mapping: Host 22 -> Container 2222 (SSH), Host 23 -> Container 2223 (Telnet)"
+log "Log volume: Host /cowrie/log -> Container /cowrie/var/log/cowrie"
 docker run -d \
   --name cowrie-honeypot \
   --restart unless-stopped \
-  --network host \
-  -v /var/log/cowrie:/cowrie/var/log/cowrie \
+  -p 22:2222 \
+  -p 23:2223 \
+  -v /cowrie/log:/cowrie/var/log/cowrie \
   cowrie/cowrie:latest
 
 log "Waiting for Cowrie container to initialize..."
@@ -119,7 +131,7 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCO
       "files": {
         "collect_list": [
           {
-            "file_path": "/var/log/cowrie/cowrie.json",
+            "file_path": "/cowrie/log/cowrie.json",
             "log_group_name": "CWLOG_GROUP",
             "log_stream_name": "CWLOG_STREAM",
             "timezone": "UTC",
@@ -128,7 +140,7 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCO
             "retention_in_days": 30
           },
           {
-            "file_path": "/var/log/cowrie/cowrie.log",
+            "file_path": "/cowrie/log/cowrie.log",
             "log_group_name": "CWLOG_GROUP",
             "log_stream_name": "CWLOG_STREAM",
             "timezone": "UTC",
@@ -182,18 +194,18 @@ else
 fi
 
 log "[STEP 2] Check honeypot log files:"
-ls -lah /var/log/cowrie/ 2>&1 | tee -a /var/log/honeypot-install.log
+ls -lah /cowrie/log/ 2>&1 | tee -a /var/log/honeypot-install.log
 
-if [ -f /var/log/cowrie/cowrie.json ]; then
+if [ -f /cowrie/log/cowrie.json ]; then
   log "OK: JSON event log exists"
-  wc -l /var/log/cowrie/cowrie.json | tee -a /var/log/honeypot-install.log
+  wc -l /cowrie/log/cowrie.json | tee -a /var/log/honeypot-install.log
 else
   log "INFO: JSON log will be created on first connection"
 fi
 
-if [ -f /var/log/cowrie/cowrie.log ]; then
+if [ -f /cowrie/log/cowrie.log ]; then
   log "OK: Text log exists - last entries:"
-  tail -3 /var/log/cowrie/cowrie.log | tee -a /var/log/honeypot-install.log
+  tail -3 /cowrie/log/cowrie.log | tee -a /var/log/honeypot-install.log
 else
   log "INFO: Text log will be created on first connection"
 fi
@@ -232,23 +244,25 @@ log "HONEYPOT INSTALLATION COMPLETE - READY FOR ATTACK"
 log "=========================================================================="
 log ""
 log "Honeypot Configuration:"
+log "  Native SSH Service: DISABLED (sshd masked)"
+log "  Cowrie Container: RUNNING"
 log "  Attack Ports: 22 (SSH), 23 (Telnet)"
-log "  Honeypot Type: Cowrie (Docker container)"
-log "  Log Location: /var/log/cowrie/cowrie.json, cowrie.log"
+log "  Port Mapping: Cowrie internal 2222->host 22, 2223->host 23"
+log "  Log Location: /cowrie/log/cowrie.json, /cowrie/log/cowrie.log"
 log "  CloudWatch Log Group: $LOG_GROUP_NAME"
 log "  CloudWatch Stream: $LOG_STREAM_NAME"
 log ""
 log "Attack Interaction Flow:"
-log "  1. Attacker: ssh root@&lt;honeypot_ip&gt;"
-log "  2. Cowrie logs authentication attempt"
+log "  1. Attacker: ssh root@<honeypot_ip>"
+log "  2. Cowrie honeypot accepts connection (default password: test)"
 log "  3. Attacker enters fake commands"
-log "  4. Cowrie logs all interactions to /var/log/cowrie/"
+log "  4. Cowrie logs all interactions to /cowrie/log/"
 log "  5. CloudWatch Agent ships logs to CloudWatch Logs"
 log "  6. Lambda processes logs and stores in DynamoDB"
 log "  7. Dashboard displays intrusion analytics"
 log ""
 log "For manual testing:"
-log "  ssh root@&lt;public_ip&gt;  (default password: test)"
+log "  ssh root@<public_ip>  (any password accepted)"
 log ""
 log "Installation Log: /var/log/honeypot-install.log"
 log "=========================================================================="

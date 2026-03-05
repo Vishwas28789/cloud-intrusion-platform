@@ -98,15 +98,6 @@ resource "aws_security_group" "honeypot_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Real management SSH on port 2222
-  ingress {
-    description = "Admin SSH for management"
-    from_port   = 2222
-    to_port     = 2222
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   egress {
     description = "Allow all outbound"
     from_port   = 0
@@ -227,8 +218,7 @@ resource "aws_instance" "honeypot" {
   subnet_id              = aws_subnet.honeypot_public_subnet.id
   key_name               = aws_key_pair.honeypot.key_name
   iam_instance_profile   = aws_iam_instance_profile.honeypot_profile.name
-  vpc_security_group_ids      = [aws_security_group.honeypot_sg.id]
-  associate_public_ip_address = true
+  vpc_security_group_ids = [aws_security_group.honeypot_sg.id]
 
   root_block_device {
     volume_size           = 30
